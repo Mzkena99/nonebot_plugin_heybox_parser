@@ -41,7 +41,3 @@ pip install nonebot-plugin-htmlrender jinja2
 ## 使用
 
 在群聊或私聊中直接发送小黑盒链接即可自动触发解析。
-
-## 许可证
-
-[MIT License](LICENSE)
