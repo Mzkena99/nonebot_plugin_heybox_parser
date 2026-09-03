@@ -115,26 +115,30 @@ async def send_forward_post(
             )
 
         # 节点 3...N：图集图片（突破 9 张限制，按上限配置完整发送）
-        # 将本地图片转换为 Base64 编码以 base64:// 协议发送，
-        # 确保 OneBot 协议端能直接上传图片流至腾讯持久化图床，避免本地路径导致图片即时过期
+        # 根据配置动态选择传输格式：默认采用本地路径（内存零开销），亦支持切换为 Base64 强制图床转存
         max_images = plugin_config.heybox_max_images_forward
         for img_path in local_images[:max_images]:
             if img_path.exists():
                 try:
-                    # 读取本地图片文件的二进制数据并进行 Base64 编码
-                    with open(img_path, "rb") as f:
-                        img_base64 = base64.b64encode(f.read()).decode("utf-8")
-                    # 使用 base64:// 协议构建图片消息段并挂载到转发节点
+                    if plugin_config.heybox_forward_image_type == "base64":
+                        # 读取本地图片文件的二进制数据并转换为 Base64 编码字符串
+                        with open(img_path, "rb") as f:
+                            img_base64 = base64.b64encode(f.read()).decode("utf-8")
+                        img_segment = MessageSegment.image(f"base64://{img_base64}")
+                    else:
+                        # 默认使用本地文件路径构建图片消息段（极低内存开销，适配新版协议端）
+                        img_segment = MessageSegment.image(img_path)
+
                     nodes.append(
                         MessageSegment.node_custom(
                             user_id=sender_id,
                             nickname=result.author or "小黑盒用户",
-                            content=Message(MessageSegment.image(f"base64://{img_base64}")),
+                            content=Message(img_segment),
                         )
                     )
                 except Exception as img_err:
-                    # 若单张图片转换失败则记录警告日志并继续处理下一张图片
-                    logger.warning(f"[小黑盒解析] 合并转发图片编码 Base64 失败 ({img_path}): {img_err}")
+                    # 若单张图片构建失败则记录警告日志并继续处理下一张图片
+                    logger.warning(f"[小黑盒解析] 合并转发图片节点构建失败 ({img_path}): {img_err}")
 
         # 根据消息事件类型调用对应的合并转发 API
         if isinstance(event, GroupMessageEvent):

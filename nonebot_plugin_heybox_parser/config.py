@@ -22,6 +22,10 @@ class Config(BaseModel):
     heybox_forward_threshold_images: int = Field(default=3, description="触发合并转发的图片张数阈值（超过此数量触发，即 >3 张）")
     heybox_forward_threshold_length: int = Field(default=100, description="触发合并转发的正文字数阈值（超过此字数触发，即 >100 字）")
     heybox_max_images_forward: int = Field(default=30, description="合并转发模式下最多允许发送的图片数量")
+    heybox_forward_image_type: Literal["path", "base64"] = Field(
+        default="path",
+        description="合并转发中图片消息段的传输格式：path（本地文件路径，默认，极低内存消耗）、base64（Base64内联数据流，强力图床转存）",
+    )
     heybox_cache_expire_days: int = Field(default=3, description="本地缓存文件保留天数，0 表示不按时间自动清理")
     heybox_max_cache_mb: int = Field(default=1024, description="本地缓存目录最大允许占用的磁盘空间，单位为 MB")
     heybox_download_concurrency: int = Field(default=8, description="多图并发异步下载的最大并发协程数")
