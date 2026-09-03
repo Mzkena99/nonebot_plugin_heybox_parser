@@ -1,0 +1,555 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ title }}</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        html, body {
+            width: 100%;
+            margin: 0;
+            padding: 0;
+            background-color: #1e2025;
+            color: #e5e7eb;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+            -webkit-font-smoothing: antialiased;
+        }
+        .card {
+            width: 100%;
+            max-width: 100%;
+            background: #1e2025;
+            overflow: hidden;
+            margin: 0 auto;
+        }
+        /* 顶部品牌与话题栏 */
+        .top-bar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 16px 20px;
+            background: linear-gradient(180deg, #262932 0%, #1e2025 100%);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+        }
+        .brand-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .brand-logo {
+            width: 26px;
+            height: 26px;
+            background: #2b2e38;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+        }
+        .brand-name {
+            font-size: 14px;
+            font-weight: 700;
+            color: #f3f4f6;
+            letter-spacing: 0.5px;
+        }
+        .badge-topic {
+            background: rgba(59, 130, 246, 0.18);
+            color: #60a5fa;
+            font-size: 12px;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-weight: 500;
+            border: 1px solid rgba(59, 130, 246, 0.3);
+        }
+        .post-time {
+            font-size: 12px;
+            color: #9ca3af;
+        }
+
+        /* 作者信息栏 */
+        .user-bar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 14px 20px 8px 20px;
+        }
+        .user-left {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .avatar {
+            width: 44px;
+            height: 44px;
+            border-radius: 50%;
+            object-fit: cover;
+            border: 2px solid rgba(255, 255, 255, 0.15);
+            background-color: #2b2e38;
+        }
+        .avatar-placeholder {
+            width: 44px;
+            height: 44px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #f59e0b, #ef4444);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            font-weight: bold;
+            color: #ffffff;
+            border: 2px solid rgba(255, 255, 255, 0.15);
+        }
+        .user-meta {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+        .name-level-row {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .author-name {
+            font-size: 15px;
+            font-weight: 600;
+            color: #ffffff;
+        }
+        .level-badge {
+            font-size: 10px;
+            font-weight: bold;
+            background: linear-gradient(90deg, #f59e0b, #d97706);
+            color: #ffffff;
+            padding: 1px 5px;
+            border-radius: 3px;
+            line-height: 1.2;
+        }
+        .author-sub {
+            font-size: 12px;
+            color: #9ca3af;
+        }
+
+        /* 正文区域 */
+        .content-body {
+            padding: 10px 20px 18px 20px;
+        }
+        .title {
+            font-size: 19px;
+            font-weight: 700;
+            line-height: 1.45;
+            color: #ffffff;
+            margin-bottom: 12px;
+            word-break: break-word;
+        }
+        .description {
+            font-size: 15px;
+            line-height: 1.75;
+            color: #d1d5db;
+            white-space: pre-wrap;
+            word-break: break-word;
+            margin-bottom: 14px;
+        }
+
+        /* 结构化富文本块 */
+        .block-text {
+            font-size: 15px;
+            line-height: 1.75;
+            color: #d1d5db;
+            margin-bottom: 12px;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        .block-img {
+            width: 100%;
+            margin: 10px 0;
+            border-radius: 8px;
+            overflow: hidden;
+            background: #17181c;
+        }
+        .block-img img {
+            width: 100%;
+            max-height: 540px;
+            object-fit: contain;
+            display: block;
+        }
+        .game-card {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: #272a34;
+            padding: 10px 14px;
+            border-radius: 8px;
+            margin: 10px 0;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            font-size: 13px;
+        }
+        .game-score {
+            color: #fbbf24;
+            font-weight: 700;
+        }
+
+        /* 图集网格布局 */
+        .gallery-grid {
+            display: grid;
+            gap: 6px;
+            border-radius: 8px;
+            overflow: hidden;
+            margin-top: 12px;
+        }
+        .gallery-grid.grid-1 {
+            grid-template-columns: 1fr;
+        }
+        .gallery-grid.grid-2 {
+            grid-template-columns: repeat(2, 1fr);
+        }
+        .gallery-grid.grid-3,
+        .gallery-grid.grid-more {
+            grid-template-columns: repeat(3, 1fr);
+        }
+        .gallery-item {
+            width: 100%;
+            border-radius: 6px;
+            background-color: #262932;
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .gallery-grid.grid-1 .gallery-item {
+            max-height: 600px;
+            background: #141518;
+        }
+        .gallery-grid.grid-1 .gallery-img {
+            width: 100%;
+            max-height: 600px;
+            object-fit: contain;
+            display: block;
+        }
+        .gallery-grid.grid-2 .gallery-item,
+        .gallery-grid.grid-3 .gallery-item,
+        .gallery-grid.grid-more .gallery-item {
+            height: 190px;
+        }
+        .gallery-grid.grid-2 .gallery-img,
+        .gallery-grid.grid-3 .gallery-img,
+        .gallery-grid.grid-more .gallery-img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: block;
+        }
+
+        /* 标签药丸栏 */
+        .topics-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-top: 14px;
+        }
+        .topic-pill {
+            font-size: 12px;
+            color: #60a5fa;
+            background: rgba(59, 130, 246, 0.12);
+            padding: 3px 8px;
+            border-radius: 14px;
+            font-weight: 500;
+        }
+
+        /* 互动统计胶囊栏 */
+        .stats-bar {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 12px 20px;
+            background: #181a1e;
+            border-top: 1px solid rgba(255, 255, 255, 0.05);
+            font-size: 13px;
+            color: #9ca3af;
+        }
+        .stat-item {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            background: #23262f;
+            padding: 4px 10px;
+            border-radius: 14px;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+        .stat-icon {
+            font-size: 13px;
+        }
+        .stat-num {
+            color: #e5e7eb;
+            font-weight: 600;
+        }
+
+        /* 热门评论区域 */
+        .comments-section {
+            padding: 16px 20px;
+            background: #1b1d22;
+            border-top: 1px solid rgba(255, 255, 255, 0.06);
+        }
+        .comments-header {
+            font-size: 14px;
+            font-weight: 700;
+            color: #f3f4f6;
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .comment-item {
+            display: flex;
+            gap: 10px;
+            padding: 10px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+        }
+        .comment-item:last-child {
+            border-bottom: none;
+            padding-bottom: 0;
+        }
+        .comment-avatar {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            object-fit: cover;
+            background: #2b2e38;
+            flex-shrink: 0;
+        }
+        .comment-avatar-placeholder {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #6366f1, #a855f7);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 13px;
+            font-weight: bold;
+            color: #ffffff;
+            flex-shrink: 0;
+        }
+        .comment-right {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 3px;
+        }
+        .comment-user-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .comment-username-wrap {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .comment-username {
+            font-size: 13px;
+            font-weight: 600;
+            color: #d1d5db;
+        }
+        .comment-level {
+            font-size: 9px;
+            background: #4b5563;
+            color: #f3f4f6;
+            padding: 1px 4px;
+            border-radius: 2px;
+            font-weight: 600;
+        }
+        .comment-likes {
+            font-size: 12px;
+            color: #9ca3af;
+            display: flex;
+            align-items: center;
+            gap: 3px;
+        }
+        .comment-content {
+            font-size: 13px;
+            color: #e5e7eb;
+            line-height: 1.55;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        .comment-time {
+            font-size: 11px;
+            color: #6b7280;
+            margin-top: 2px;
+        }
+
+        /* 底栏与原链 */
+        .footer {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 20px;
+            background: #141518;
+            border-top: 1px solid rgba(255, 255, 255, 0.05);
+            font-size: 12px;
+            color: #6b7280;
+        }
+        .link-text {
+            color: #3b82f6;
+            word-break: break-all;
+            text-decoration: none;
+            max-width: 460px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <!-- 顶部信息栏 -->
+        <div class="top-bar">
+            <div class="brand-group">
+                <div class="brand-logo">📦</div>
+                <span class="brand-name">小黑盒动态</span>
+                {% if topics and topics|length > 0 %}
+                <span class="badge-topic"># {{ topics[0] }}</span>
+                {% endif %}
+            </div>
+            {% if created_at %}
+            <div class="post-time">{{ created_at }}</div>
+            {% endif %}
+        </div>
+
+        <!-- 作者信息栏 -->
+        <div class="user-bar">
+            <div class="user-left">
+                {% if author_avatar %}
+                <img class="avatar" src="{{ author_avatar }}" alt="avatar" />
+                {% else %}
+                <div class="avatar-placeholder">{{ (author or "盒")[0] }}</div>
+                {% endif %}
+                <div class="user-meta">
+                    <div class="name-level-row">
+                        <span class="author-name">{{ author or "小黑盒用户" }}</span>
+                        {% if user_level %}
+                        <span class="level-badge">Lv.{{ user_level }}</span>
+                        {% endif %}
+                    </div>
+                    <span class="author-sub">小黑盒社区</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- 正文主体 -->
+        <div class="content-body">
+            {% if title and title != "小黑盒分享" and title != "小黑盒帖子" %}
+            <div class="title">{{ title }}</div>
+            {% endif %}
+
+            <!-- 结构化块渲染 -->
+            {% if blocks and blocks|length > 0 %}
+                {% for block in blocks %}
+                    {% if block.type == "text" and block.text %}
+                    <div class="block-text">{{ block.text }}</div>
+                    {% elif block.type == "img" and block.src %}
+                    <div class="block-img">
+                        <img src="{{ block.src }}" alt="post-img" />
+                    </div>
+                    {% elif block.type == "game" and block.name %}
+                    <div class="game-card">
+                        <span>🎮 {{ block.name }}</span>
+                        {% if block.score %}
+                        <span class="game-score">{{ block.score }} 分</span>
+                        {% endif %}
+                    </div>
+                    {% endif %}
+                {% endfor %}
+            {% elif description %}
+            <div class="description">{{ description }}</div>
+            {% endif %}
+
+            <!-- 图集网格展示（当未嵌入在 blocks 中时） -->
+            {% if (not blocks or blocks|length == 0) and images and images|length > 0 %}
+            <div class="gallery-grid {% if images|length == 1 %}grid-1{% elif images|length == 2 or images|length == 4 %}grid-2{% elif images|length == 3 %}grid-3{% else %}grid-more{% endif %}">
+                {% for img_src in images %}
+                <div class="gallery-item">
+                    <img class="gallery-img" src="{{ img_src }}" alt="gallery-img" />
+                </div>
+                {% endfor %}
+            </div>
+            {% endif %}
+
+            <!-- 标签列表 -->
+            {% if topics and topics|length > 1 %}
+            <div class="topics-row">
+                {% for t in topics %}
+                <span class="topic-pill"># {{ t }}</span>
+                {% endfor %}
+            </div>
+            {% endif %}
+        </div>
+
+        <!-- 互动统计栏 -->
+        <div class="stats-bar">
+            <div class="stat-item">
+                <span class="stat-icon">👍</span>
+                <span class="stat-num">{{ stats.likes if stats and stats.likes else 0 }}</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-icon">💬</span>
+                <span class="stat-num">{{ stats.comments if stats and stats.comments else 0 }}</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-icon">👁️</span>
+                <span class="stat-num">{{ stats.views if stats and stats.views else 0 }}</span>
+            </div>
+        </div>
+
+        <!-- 热门评论栏（若有） -->
+        {% if hot_comments and hot_comments|length > 0 %}
+        <div class="comments-section">
+            <div class="comments-header">
+                <span>🔥 热门评论 ({{ hot_comments|length }})</span>
+            </div>
+            {% for comment in hot_comments %}
+            <div class="comment-item">
+                {% if comment.avatar %}
+                <img class="comment-avatar" src="{{ comment.avatar }}" alt="avatar" />
+                {% else %}
+                <div class="comment-avatar-placeholder">{{ (comment.username or "盒")[0] }}</div>
+                {% endif %}
+                <div class="comment-right">
+                    <div class="comment-user-row">
+                        <div class="comment-username-wrap">
+                            <span class="comment-username">{{ comment.username }}</span>
+                            {% if comment.level %}
+                            <span class="comment-level">Lv.{{ comment.level }}</span>
+                            {% endif %}
+                        </div>
+                        {% if comment.likes %}
+                        <div class="comment-likes">
+                            <span>👍</span>
+                            <span>{{ comment.likes }}</span>
+                        </div>
+                        {% endif %}
+                    </div>
+                    <div class="comment-content">{{ comment.content }}</div>
+                    {% if comment.created_at %}
+                    <div class="comment-time">{{ comment.created_at }}</div>
+                    {% endif %}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        <!-- 底部原链 -->
+        <div class="footer">
+            <span>来源: 小黑盒社区</span>
+            {% if clean_url %}
+            <span class="link-text">{{ clean_url }}</span>
+            {% endif %}
+        </div>
+    </div>
+</body>
+</html>
