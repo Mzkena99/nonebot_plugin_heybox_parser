@@ -118,13 +118,14 @@ async def render_post_to_image(
             clean_url=result.clean_url or (f"https://www.xiaoheihe.cn/bbs/post_share?link_id={result.link_id}" if result.link_id else None),
         )
 
-        # 调用 html_to_pic 生成长图（设置精准视口宽度，杜绝多余左右黑边）
+        # 调用 html_to_pic 生成长图（优化为高质量 JPEG 压缩，大幅减小体积并保证清晰度）
         pic_bytes = await html_to_pic(
             html=rendered_html,
             wait=0,
-            type="png",
+            type="jpeg",
+            quality=85,
             viewport={"width": 680, "height": 100},
-            device_scale_factor=2,  # 提升高分屏清晰度
+            device_scale_factor=1.5,  # 适度缩放兼顾高清排版与体积控制
         )
         return pic_bytes
 
