@@ -1,0 +1,43 @@
+[tool.poetry]
+name = "nonebot-plugin-heybox-parser"
+version = "0.2.0"
+description = "适用于 NoneBot2 的小黑盒（Heybox）帖子与视频自动解析插件（支持原链去参、合并转发、HTML长图渲染、多图并发与缓存管理）"
+authors = ["Mzkena99"]
+license = "MIT"
+readme = "README.md"
+homepage = "https://github.com/Mzkena99/nonebot_plugin_heybox_parser"
+repository = "https://github.com/Mzkena99/nonebot_plugin_heybox_parser"
+keywords = ["nonebot", "nonebot2", "heybox", "xiaoheihe", "parser", "onebot"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Framework :: AsyncIO",
+]
+packages = [
+    { include = "nonebot_plugin_heybox_parser", from = ".." }
+]
+
+[tool.poetry.dependencies]
+python = "^3.9"
+nonebot2 = "^2.2.0"
+nonebot-adapter-onebot = "^2.4.0"
+httpx = ">=0.24.0"
+aiofiles = ">=23.0.0"
+pydantic = ">=2.0.0"
+nonebot-plugin-htmlrender = { version = ">=0.3.0", optional = true }
+jinja2 = { version = ">=3.0.0", optional = true }
+
+[tool.poetry.extras]
+htmlrender = ["nonebot-plugin-htmlrender", "jinja2"]
+
+[tool.nonebot]
+plugins = ["nonebot_plugin_heybox_parser"]
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"

@@ -1,0 +1,29 @@
+﻿# JetBrains IDE 配置目录（如 PyCharm、IntelliJ 等）
+.idea/
+
+# VS Code 配置目录
+.vscode/
+
+# Python 字节码与缓存
+__pycache__/
+*.py[cod]
+*.class
+
+# 虚拟环境目录
+.venv/
+venv/
+env/
+
+# 打包构建产物
+build/
+dist/
+*.egg-info/
+
+# 测试与代码覆盖率缓存
+.pytest_cache/
+.coverage
+htmlcov/
+
+# 本地运行临时与数据缓存
+data/
+*.log

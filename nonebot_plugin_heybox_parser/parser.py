@@ -1,3 +1,4 @@
+from datetime import datetime
 import hashlib
 import html
 import json
@@ -92,6 +93,229 @@ def get_web_signature(path: str) -> dict[str, str]:
         "_time": str(timestamp),
         "nonce": nonce,
     }
+
+
+def clean_heybox_url(url: str = "", link_id: str | None = None) -> str:
+    """清洗小黑盒分享链接，去除多余跟踪参数并生成标准干净链接
+
+    Args:
+        url (str): 原始小黑盒链接
+        link_id (str | None): 帖子的 link_id
+
+    Returns:
+        str: 清洗后的规范 URL
+    """
+    # 若存在 link_id，优先构造官方标准分享短链
+    if link_id:
+        return f"https://www.xiaoheihe.cn/bbs/post_share?link_id={link_id}"
+    if not url:
+        return ""
+
+    # 解析 URL 并剥离常见跟踪与设备参数
+    parsed = urlparse(url)
+    params = parse_qs(parsed.query)
+    tracker_keys = {
+        "hkey", "_time", "nonce", "share_time", "src", "invitation_code",
+        "is_redirect", "client_type", "version", "web_version", "x_client_type",
+        "x_app", "heybox_id", "x_os_type", "device_info", "device_id", "os_type",
+        "app", "userid", "user_id", "spm", "from", "timestamp", "amp;hkey",
+        "amp;_time", "amp;nonce", "amp;link_id", "amp;linkid",
+    }
+    cleaned_params = {k: v for k, v in params.items() if k.lower() not in tracker_keys}
+    query_str = "&".join(f"{k}={v[0]}" for k, v in cleaned_params.items())
+
+    clean_path = parsed.path or "/"
+    if query_str:
+        return f"{parsed.scheme}://{parsed.netloc}{clean_path}?{query_str}"
+    return f"{parsed.scheme}://{parsed.netloc}{clean_path}"
+
+
+def _format_created_at(val: int | float | str | None) -> str | None:
+    """格式化时间戳或时间字符串为可读时间（如 2024-05-20 18:30）
+
+    Args:
+        val: 原始时间字段（秒/毫秒时间戳或字符串）
+
+    Returns:
+        str | None: 格式化后的时间字符串
+    """
+    if val is None or val == "":
+        return None
+    try:
+        if isinstance(val, (int, float)):
+            ts = val / 1000.0 if val > 1e11 else val
+            return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")
+        if isinstance(val, str) and val.strip().isdigit():
+            ts = int(val.strip())
+            ts = ts / 1000.0 if ts > 1e11 else ts
+            return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")
+        return str(val).strip()
+    except Exception:
+        return str(val)
+
+
+def _extract_hot_comments(data: dict) -> list[dict]:
+    """从小黑盒 API 或页面原始数据中提取结构化的热门评论列表
+
+    Args:
+        data (dict): 接口响应或页面 JSON 字典
+
+    Returns:
+        list[dict]: 清洗提取后的热门评论列表
+    """
+    if not isinstance(data, dict):
+        return []
+
+    # 兼容多种热门评论字段层级
+    comments_raw = (
+        data.get("hot_comments")
+        or data.get("hot_comment")
+        or data.get("comments")
+        or data.get("comment_list")
+        or []
+    )
+    if not isinstance(comments_raw, list):
+        return []
+
+    # 扁平化评论条目（兼容楼层结构与单层结构）
+    flat_comments: list[dict] = []
+    for item in comments_raw:
+        if not isinstance(item, dict):
+            continue
+        if "comment" in item and isinstance(item["comment"], list):
+            for sub_c in item["comment"]:
+                if isinstance(sub_c, dict):
+                    flat_comments.append(sub_c)
+        else:
+            flat_comments.append(item)
+
+    hot_list: list[dict] = []
+    for item in flat_comments:
+        user = item.get("user") or item.get("author") or {}
+        username = user.get("username") or user.get("nickname") or "小黑盒用户"
+        avatar = user.get("avatar") or user.get("avatar_url") or user.get("avartar") or user.get("head_url")
+        level_info = user.get("level_info") if isinstance(user.get("level_info"), dict) else {}
+        level = user.get("level") or user.get("user_level") or level_info.get("level")
+        text = item.get("text") or item.get("content") or ""
+        
+        if text and isinstance(text, str):
+            # 过滤 HTML 标签（如表情卡片与超链接文本）
+            clean_text = re.sub(r"<[^>]+>", "", text).strip()
+            if clean_text:
+                likes = item.get("like_num") or item.get("up") or item.get("up_num") or item.get("praise_num") or 0
+                comment_time = _format_created_at(
+                    item.get("create_at") or item.get("created_at") or item.get("time")
+                )
+                hot_list.append({
+                    "username": username,
+                    "avatar": avatar,
+                    "level": level,
+                    "content": clean_text,
+                    "likes": likes,
+                    "created_at": comment_time,
+                })
+    return hot_list
+
+
+def _extract_video_url(data: dict, raw_blocks: list | None = None) -> str | None:
+    """从字典、分块数据及嵌套结构中提取有效的视频直链 URL
+
+    Args:
+        data (dict): 帖子详情或根数据字典
+        raw_blocks (list | None): 富文本 JSON 分块列表
+
+    Returns:
+        str | None: 提取到的有效视频播放直链地址
+    """
+    if not isinstance(data, dict):
+        return None
+
+    # 1. 检查顶层直接给出的视频链接字段
+    for field_name in ("video_url", "mp4_url", "play_url", "main_url", "stream_url", "hls_url", "m3u8_url"):
+        if u := data.get(field_name):
+            if isinstance(u, str) and ("http" in u):
+                return u.strip()
+
+    # 2. 检查嵌套的 video / video_info / video_data / media 字典或列表
+    for key in ("video", "video_info", "video_data", "media", "media_info"):
+        v_obj = data.get(key)
+        if isinstance(v_obj, dict):
+            for sub_key in ("url", "mp4_url", "main_url", "play_url", "video_url", "src", "stream", "hls_url", "m3u8_url"):
+                if u := v_obj.get(sub_key):
+                    if isinstance(u, str) and ("http" in u):
+                        return u.strip()
+        elif isinstance(v_obj, str) and ("http" in v_obj):
+            return v_obj.strip()
+        elif isinstance(v_obj, list):
+            for item in v_obj:
+                if isinstance(item, dict):
+                    for sub_key in ("url", "mp4_url", "main_url", "play_url", "video_url", "src"):
+                        if u := item.get(sub_key):
+                            if isinstance(u, str) and ("http" in u):
+                                return u.strip()
+                elif isinstance(item, str) and ("http" in item):
+                    return item.strip()
+
+    # 3. 检查 videos 列表字段
+    if v_list := data.get("videos"):
+        if isinstance(v_list, list):
+            for item in v_list:
+                if isinstance(item, dict):
+                    for sub_key in ("url", "mp4_url", "main_url", "play_url", "video_url", "src"):
+                        if u := item.get(sub_key):
+                            if isinstance(u, str) and ("http" in u):
+                                return u.strip()
+                elif isinstance(item, str) and ("http" in item):
+                    return item.strip()
+
+    # 4. 检查富文本 JSON 分块中的 video 节点
+    if raw_blocks:
+        for block in raw_blocks:
+            if isinstance(block, dict) and block.get("type") in ("video", "media"):
+                for sub_key in ("url", "mp4_url", "video_url", "play_url", "src", "main_url"):
+                    if u := block.get(sub_key):
+                        if isinstance(u, str) and ("http" in u):
+                            return u.strip()
+
+    # 5. 兜底策略：在整个数据结构中深度查找带有 .mp4 或视频流特征的直链
+    def find_mp4(obj):
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                if k in ("user", "avatar", "author", "medals", "topics", "feedback", "comments", "hot_comments"):
+                    continue
+                if res := find_mp4(v):
+                    return res
+        elif isinstance(obj, list):
+            for item in obj:
+                if res := find_mp4(item):
+                    return res
+        elif isinstance(obj, str) and ("http" in obj) and (".mp4" in obj.lower() or "video.xiaoheihe.cn" in obj.lower()):
+            return obj.strip()
+        return None
+
+    return find_mp4(data)
+
+
+def _extract_video_cover(data: dict) -> str | None:
+    """提取视频封面图 URL
+
+    Args:
+        data (dict): 帖子详情或根数据字典
+
+    Returns:
+        str | None: 提取到的封面图地址
+    """
+    if not isinstance(data, dict):
+        return None
+    for key in ("video", "video_info", "video_data", "media"):
+        v_obj = data.get(key)
+        if isinstance(v_obj, dict):
+            for c_key in ("cover", "thumb", "poster", "preview", "cover_url", "thumb_url"):
+                if u := v_obj.get(c_key):
+                    if isinstance(u, str) and ("http" in u):
+                        return u.strip()
+    return None
+
 
 # 伪装客户端请求头，模拟 iOS/Android 浏览环境
 COMMON_HEADER = {
@@ -262,11 +486,12 @@ class HeyboxParser:
 
         raise ValueError("小黑盒页面解析失败，网络超时或资源已被删除")
 
-    def _parse_from_redirect_dict(self, data: dict) -> HeyboxParseResult:
+    def _parse_from_redirect_dict(self, data: dict, link_id: str | None = None) -> HeyboxParseResult:
         """从重定向 location 提取的 redirect_data 字典构建解析结果对象
 
         Args:
             data (dict): 解码后的 redirect_data 字典数据
+            link_id (str | None): 可选的 link_id
 
         Returns:
             HeyboxParseResult: 结构化解析结果
@@ -276,7 +501,43 @@ class HeyboxParser:
 
         title = link_info.get("title") or link_info.get("description") or "小黑盒分享"
         author_name = user_info.get("username") or user_info.get("nickname") or "小黑盒用户"
+        author_avatar = (
+            user_info.get("avatar")
+            or user_info.get("avatar_url")
+            or user_info.get("head_url")
+            or user_info.get("head")
+        )
+        user_level = user_info.get("level") or user_info.get("user_level")
+        created_at = _format_created_at(
+            link_info.get("create_at")
+            or link_info.get("created_at")
+            or link_info.get("post_time")
+        )
         description = link_info.get("description") or link_info.get("summary") or link_info.get("desc")
+
+        effective_link_id = link_id or link_info.get("link_id") or link_info.get("linkid") or data.get("link_id")
+        effective_link_id = str(effective_link_id) if effective_link_id else None
+        clean_url = clean_heybox_url(link_id=effective_link_id) if effective_link_id else None
+
+        # 提取话题与版块标签
+        topics: list[str] = []
+        if raw_topics := (link_info.get("topics") or link_info.get("tags") or link_info.get("tag_name")):
+            if isinstance(raw_topics, list):
+                for t in raw_topics:
+                    if isinstance(t, dict) and (tn := t.get("name") or t.get("topic_name")):
+                        topics.append(str(tn))
+                    elif isinstance(t, str):
+                        topics.append(t)
+            elif isinstance(raw_topics, str):
+                topics.append(raw_topics)
+
+        # 提取统计互动数据
+        stats = {
+            "likes": link_info.get("like_num") or link_info.get("up_num") or link_info.get("score") or 0,
+            "comments": link_info.get("reply_num") or link_info.get("comment_num") or 0,
+            "views": link_info.get("view_num") or link_info.get("read_num") or 0,
+            "shares": link_info.get("share_num") or 0,
+        }
 
         # 提取图片资源
         pic_urls = []
@@ -305,12 +566,22 @@ class HeyboxParser:
             content = ImageContent(pic_urls=pic_urls)
 
         cover_url = pic_urls[0] if pic_urls else None
+        hot_comments = _extract_hot_comments(data) or _extract_hot_comments(link_info)
 
         return HeyboxParseResult(
             title=title,
             author=author_name,
+            author_avatar=author_avatar,
+            user_level=user_level,
+            created_at=created_at,
             description=description,
             cover_url=cover_url,
+            link_id=effective_link_id,
+            clean_url=clean_url,
+            topics=topics,
+            stats=stats,
+            blocks=[],
+            hot_comments=hot_comments,
             content=content,
         )
 
@@ -323,9 +594,8 @@ class HeyboxParser:
             link_id (str): 小黑盒帖子的 link_id
 
         Returns:
-            HeyboxParseResult: 结构化数据结果
+            HeyboxParseResult: 结构化解析结果
         """
-        # 优先使用配置中用户指定的真实 Cookie，未配置则使用会话保持的设备 Cookie
         custom_cookie = plugin_config.heybox_cookie
         cookie_str = (
             custom_cookie
@@ -334,26 +604,7 @@ class HeyboxParser:
         )
 
         headers = self.headers.copy()
-        headers.update(
-            {
-                "User-Agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/125.0.0.0 Safari/537.36"
-                ),
-                "Accept": "application/json, text/plain, */*",
-                "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-                "Referer": "https://www.xiaoheihe.cn/",
-                "Origin": "https://www.xiaoheihe.cn",
-                "Sec-Ch-Ua": '"Google Chrome";v="125", "Chromium";v="125", "Not.A/Brand";v="99"',
-                "Sec-Ch-Ua-Mobile": "?0",
-                "Sec-Ch-Ua-Platform": '"Windows"',
-                "Sec-Fetch-Dest": "empty",
-                "Sec-Fetch-Mode": "cors",
-                "Sec-Fetch-Site": "same-site",
-                "Cookie": cookie_str,
-            }
-        )
+        headers["Cookie"] = cookie_str
 
         # 候选 API 路由列表，支持主路由触发风控时自动退避重试备用路由
         endpoints = [
@@ -362,13 +613,14 @@ class HeyboxParser:
             ("/bbs/app/feeds/single", "https://api.xiaoheihe.cn/bbs/app/feeds/single"),
         ]
 
-        last_error = "未获得响应"
         res_json = None
+        last_error = ""
 
         async with httpx.AsyncClient(
             headers=headers,
             proxy=self.proxy,
             timeout=COMMON_TIMEOUT,
+            follow_redirects=True,
         ) as client:
             for path, api_url in endpoints:
                 sig = get_web_signature(path)
@@ -390,7 +642,7 @@ class HeyboxParser:
                 try:
                     response = await client.get(api_url, params=params)
                     if response.status_code != 200:
-                        last_error = f"HTTP {response.status_code}"
+                        last_error = f"{path} HTTP {response.status_code}"
                         continue
 
                     data = response.json()
@@ -400,7 +652,7 @@ class HeyboxParser:
                         logger.warning(f"[小黑盒解析] 接口 {path} 触发 show_captcha 风控，尝试轮询备用路由...")
                         continue
 
-                    if status_val == "ok" or data.get("code") == 0:
+                    if status_val == "ok" or data.get("code") == 0 or data.get("result") or data.get("data"):
                         res_json = data
                         break
 
@@ -424,33 +676,82 @@ class HeyboxParser:
         )
         user_info = post_detail.get("user") or post_detail.get("author") or {}
         author_name = user_info.get("username") or user_info.get("nickname") or "小黑盒用户"
+        author_avatar = (
+            user_info.get("avatar")
+            or user_info.get("avatar_url")
+            or user_info.get("avartar")
+            or user_info.get("head_url")
+            or user_info.get("head")
+        )
+        level_info = user_info.get("level_info") if isinstance(user_info.get("level_info"), dict) else {}
+        user_level = user_info.get("level") or user_info.get("user_level") or level_info.get("level")
+        created_at = _format_created_at(
+            post_detail.get("create_at")
+            or post_detail.get("created_at")
+            or post_detail.get("post_time")
+            or post_detail.get("publish_time")
+        )
+        clean_url = clean_heybox_url(link_id=link_id)
 
-        # 提取帖子正文/描述内容
+        # 提取话题与社区版块标签
+        topics: list[str] = []
+        if raw_topics := (post_detail.get("topics") or post_detail.get("tags") or post_detail.get("topic")):
+            if isinstance(raw_topics, list):
+                for t in raw_topics:
+                    if isinstance(t, dict) and (tn := t.get("name") or t.get("topic_name") or t.get("title")):
+                        topics.append(str(tn))
+                    elif isinstance(t, str):
+                        topics.append(t)
+            elif isinstance(raw_topics, str):
+                topics.append(raw_topics)
+        elif tag_name := (post_detail.get("tag_name") or post_detail.get("forum_name")):
+            topics.append(str(tag_name))
+
+        # 提取统计互动数据
+        stats = {
+            "likes": post_detail.get("like_num") or post_detail.get("up_num") or post_detail.get("score") or 0,
+            "comments": post_detail.get("reply_num") or post_detail.get("comment_num") or 0,
+            "views": post_detail.get("view_num") or post_detail.get("read_num") or post_detail.get("click_num") or 0,
+            "shares": post_detail.get("share_num") or 0,
+        }
+
+        # 提取帖子正文/描述内容与富文本分块（确保不被摘要截断）
         description = (
             post_detail.get("description")
             or post_detail.get("summary")
             or post_detail.get("desc")
+            or ""
         )
-        if not description and (text_content := post_detail.get("text")):
+        raw_blocks = []
+        if text_content := post_detail.get("text"):
             if isinstance(text_content, str):
                 if text_content.strip().startswith("["):
                     try:
-                        blocks = json.loads(text_content)
-                        text_parts = [b.get("text", "").strip() for b in blocks if isinstance(b, dict) and b.get("type") == "text"]
-                        description = "\n".join(filter(None, text_parts)).strip()
+                        raw_blocks = json.loads(text_content)
+                        text_parts = [
+                            b.get("text", "").strip()
+                            for b in raw_blocks
+                            if isinstance(b, dict) and b.get("type") == "text" and b.get("text")
+                        ]
+                        full_text = "\n".join(filter(None, text_parts)).strip()
+                        # 若分块文本比短描述更完整，则以完整分块文本为准
+                        if full_text and len(full_text) > len(description):
+                            description = full_text
                     except Exception:
-                        description = text_content
-                else:
+                        if not description:
+                            description = text_content
+                elif not description:
                     description = text_content
 
-        # 视频链接抽取
-        video_url = None
-        if video_data := post_detail.get("video"):
-            video_url = (
-                video_data.get("url")
-                or video_data.get("mp4_url")
-                or video_data.get("main_url")
-            )
+        # 提取热门评论列表
+        hot_comments = _extract_hot_comments(result_data) or _extract_hot_comments(post_detail)
+
+        # 提取视频直链与封面
+        video_url = (
+            _extract_video_url(post_detail, raw_blocks)
+            or _extract_video_url(result_data, raw_blocks)
+        )
+        video_cover = _extract_video_cover(post_detail) or _extract_video_cover(result_data)
 
         # 优先从 post_detail 中提取图集链接
         pic_urls = []
@@ -466,17 +767,12 @@ class HeyboxParser:
                     pic_urls.append(img_item)
 
         # 方式 2: 小黑盒新版结构，正文图集保存在 text (JSON 字符串) 中
-        if not pic_urls and (text_content := post_detail.get("text")):
-            if isinstance(text_content, str) and text_content.strip().startswith("["):
-                try:
-                    blocks = json.loads(text_content)
-                    for block in blocks:
-                        if isinstance(block, dict) and block.get("type") == "img":
-                            img_url = block.get("url") or block.get("src") or block.get("origin_url")
-                            if img_url and img_url not in pic_urls:
-                                pic_urls.append(img_url)
-                except Exception as json_err:
-                    logger.warning(f"[小黑盒解析] 解析正文 JSON 图集列表失败: {json_err}")
+        if not pic_urls and raw_blocks:
+            for block in raw_blocks:
+                if isinstance(block, dict) and block.get("type") == "img":
+                    img_url = block.get("url") or block.get("src") or block.get("origin_url")
+                    if img_url and img_url not in pic_urls:
+                        pic_urls.append(img_url)
 
         # 方式 3: 若上述均未找到，退避在 post_detail 内部（排除用户头像与勋章图标）递归查找图片
         if not pic_urls:
@@ -484,7 +780,7 @@ class HeyboxParser:
                 imgs = []
                 if isinstance(obj, dict):
                     for k, v in obj.items():
-                        if k in ("user", "medals", "topics", "feedback", "comments"):
+                        if k in ("user", "medals", "topics", "feedback", "comments", "hot_comments"):
                             continue
                         if k in ("images", "pics", "img_url", "url", "origin_url", "src") and isinstance(v, (list, str)):
                             if isinstance(v, list):
@@ -514,13 +810,22 @@ class HeyboxParser:
         elif pic_urls:
             content = ImageContent(pic_urls=pic_urls)
 
-        cover_url = pic_urls[0] if pic_urls else None
+        cover_url = pic_urls[0] if pic_urls else video_cover
 
         return HeyboxParseResult(
             title=title,
             author=author_name,
+            author_avatar=author_avatar,
+            user_level=user_level,
+            created_at=created_at,
             description=description,
             cover_url=cover_url,
+            link_id=link_id,
+            clean_url=clean_url,
+            topics=topics,
+            stats=stats,
+            blocks=raw_blocks,
+            hot_comments=hot_comments,
             content=content,
         )
 
@@ -573,20 +878,78 @@ class HeyboxParser:
         )
         user_info = post_detail.get("user") or post_detail.get("author") or {}
         author_name = user_info.get("username") or user_info.get("nickname") or "小黑盒用户"
+        author_avatar = (
+            user_info.get("avatar")
+            or user_info.get("avatar_url")
+            or user_info.get("head_url")
+            or user_info.get("head")
+        )
+        user_level = user_info.get("level") or user_info.get("user_level")
+        created_at = _format_created_at(
+            post_detail.get("create_at")
+            or post_detail.get("created_at")
+            or post_detail.get("post_time")
+            or post_detail.get("publish_time")
+        )
+        clean_url = clean_heybox_url(link_id=link_id)
+
+        # 提取话题与社区版块标签
+        topics: list[str] = []
+        if raw_topics := (post_detail.get("topics") or post_detail.get("tags") or post_detail.get("topic")):
+            if isinstance(raw_topics, list):
+                for t in raw_topics:
+                    if isinstance(t, dict) and (tn := t.get("name") or t.get("topic_name") or t.get("title")):
+                        topics.append(str(tn))
+                    elif isinstance(t, str):
+                        topics.append(t)
+            elif isinstance(raw_topics, str):
+                topics.append(raw_topics)
+        elif tag_name := (post_detail.get("tag_name") or post_detail.get("forum_name")):
+            topics.append(str(tag_name))
+
+        # 提取统计互动数据
+        stats = {
+            "likes": post_detail.get("like_num") or post_detail.get("up_num") or post_detail.get("score") or 0,
+            "comments": post_detail.get("reply_num") or post_detail.get("comment_num") or 0,
+            "views": post_detail.get("view_num") or post_detail.get("read_num") or post_detail.get("click_num") or 0,
+            "shares": post_detail.get("share_num") or 0,
+        }
+
         description = (
             post_detail.get("description")
             or post_detail.get("summary")
             or post_detail.get("desc")
+            or ""
         )
+        raw_blocks = []
+        if text_content := post_detail.get("text"):
+            if isinstance(text_content, str):
+                if text_content.strip().startswith("["):
+                    try:
+                        raw_blocks = json.loads(text_content)
+                        text_parts = [
+                            b.get("text", "").strip()
+                            for b in raw_blocks
+                            if isinstance(b, dict) and b.get("type") == "text" and b.get("text")
+                        ]
+                        full_text = "\n".join(filter(None, text_parts)).strip()
+                        if full_text and len(full_text) > len(description):
+                            description = full_text
+                    except Exception:
+                        if not description:
+                            description = text_content
+                elif not description:
+                    description = text_content
 
-        # 提取视频直链
-        video_url = None
-        if video_data := post_detail.get("video"):
-            video_url = (
-                video_data.get("url")
-                or video_data.get("mp4_url")
-                or video_data.get("main_url")
-            )
+        # 提取热门评论
+        hot_comments = _extract_hot_comments(post_detail) or _extract_hot_comments(raw_data)
+
+        # 提取视频直链与视频封面
+        video_url = (
+            _extract_video_url(post_detail, raw_blocks)
+            or _extract_video_url(raw_data, raw_blocks)
+        )
+        video_cover = _extract_video_cover(post_detail) or _extract_video_cover(raw_data)
 
         # 提取图集链接列表
         pic_urls = []
@@ -608,16 +971,21 @@ class HeyboxParser:
             content = ImageContent(pic_urls=pic_urls)
 
         # 封面图提取
-        cover_url = None
-        if pic_urls:
-            cover_url = pic_urls[0]
-        elif video_data and isinstance(video_data, dict):
-            cover_url = video_data.get("cover") or video_data.get("thumb")
+        cover_url = pic_urls[0] if pic_urls else video_cover
 
         return HeyboxParseResult(
             title=title,
             author=author_name,
+            author_avatar=author_avatar,
+            user_level=user_level,
+            created_at=created_at,
             description=description,
             cover_url=cover_url,
+            link_id=link_id,
+            clean_url=clean_url,
+            topics=topics,
+            stats=stats,
+            blocks=raw_blocks,
+            hot_comments=hot_comments,
             content=content,
         )

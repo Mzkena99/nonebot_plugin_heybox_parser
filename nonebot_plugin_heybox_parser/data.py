@@ -25,13 +25,22 @@ class ImageContent:
 class HeyboxParseResult:
     """小黑盒统一解析结果模型
 
-    封装了解析出来的帖子标题、作者名称、封面图片 URL 以及具体的内容对象 (视频或图集)
+    封装了解析出来的帖子标题、作者名称、头像、等级、发布时间、话题标签、正文内容、互动统计、纯净链接以及具体媒体对象
     """
 
     title: str
     author: str | None = None
+    author_avatar: str | None = None
+    user_level: int | str | None = None
+    created_at: str | None = None
     description: str | None = None
     cover_url: str | None = None
+    link_id: str | None = None
+    clean_url: str | None = None
+    topics: list[str] = field(default_factory=list)
+    stats: dict[str, int | str] = field(default_factory=dict)
+    blocks: list[dict] = field(default_factory=list)
+    hot_comments: list[dict] = field(default_factory=list)
     content: VideoContent | ImageContent | None = None
 
     @property
