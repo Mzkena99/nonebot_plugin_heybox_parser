@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 from pathlib import Path
+import re
 import time
 from urllib.parse import urlparse, urlunparse
 
@@ -180,50 +181,81 @@ class Downloader:
         return save_path
 
     def _get_candidate_image_urls(self, original_url: str) -> list[str]:
-        """为目标图片 URL 生成包含官方 CDN 镜像域名的候选尝试列表
+        """为图片 URL 生成高优先级真实无损原图候选与备选官方 CDN 镜像列表
+
+        小黑盒图片存储机制：
+        创作者上传的无损原图保存在 /<hash>.<ext>，而客户端默认请求的是位于其子路径下的
+        缩略图 /<hash>/thumb.<ext>。通过正则逆向还原无损原图路径，可直接下载与小黑盒客户端
+        点击“查看原图”完全一致的高清大图和完整动图
 
         Args:
             original_url (str): 原始图片 URL
 
         Returns:
-            list[str]: 包含原 URL 与备选官方 CDN 镜像的 URL 列表
+            list[str]: 按优先级排序的高清真实原图与备选 CDN 镜像 URL 列表
         """
-        candidates = [original_url]
-        try:
-            parsed = urlparse(original_url)
-            host = parsed.netloc.lower()
-            if any(key in host for key in ("max-c.com", "xiaoheihe.cn", "heybox")):
-                for alt_host in OFFICIAL_CDN_HOSTS:
-                    if alt_host != host:
-                        alt_url = urlunparse((
-                            parsed.scheme,
-                            alt_host,
-                            parsed.path,
-                            parsed.params,
-                            parsed.query,
-                            parsed.fragment,
-                        ))
-                        if alt_url not in candidates:
-                            candidates.append(alt_url)
-        except Exception:
-            pass
-        return candidates
+        clean_url = original_url.split("?")[0]
+        base_candidates: list[str] = []
+
+        # 匹配小黑盒缩略图特征：/<32位hash>/thumb.<ext>
+        match = re.search(r'/([a-f0-9]{32})/thumb\.([a-zA-Z0-9]+)', clean_url)
+        if match:
+            h, ext = match.group(1), match.group(2)
+            prefix = clean_url[:match.start()]
+            # 候选 1: 同名扩展名的无损原图（小黑盒官方默认原图命名规则）
+            base_candidates.append(f"{prefix}/{h}.{ext}")
+            # 候选 2: 尝试常见扩展名候选（包含动图与常见静图）
+            for alt_ext in ("png", "gif", "jpg", "jpeg", "webp"):
+                c = f"{prefix}/{h}.{alt_ext}"
+                if c not in base_candidates:
+                    base_candidates.append(c)
+
+        # 兜底：原始传入链接（去参数后）
+        if clean_url not in base_candidates:
+            base_candidates.append(clean_url)
+        if original_url not in base_candidates:
+            base_candidates.append(original_url)
+
+        # 为每个候选 URL 扩展官方 CDN 镜像
+        final_candidates: list[str] = []
+        for cand in base_candidates:
+            if cand not in final_candidates:
+                final_candidates.append(cand)
+            try:
+                parsed = urlparse(cand)
+                host = parsed.netloc.lower()
+                if any(key in host for key in ("max-c.com", "xiaoheihe.cn", "heybox")):
+                    for alt_host in OFFICIAL_CDN_HOSTS:
+                        if alt_host != host:
+                            alt_url = urlunparse((
+                                parsed.scheme,
+                                alt_host,
+                                parsed.path,
+                                parsed.params,
+                                parsed.query,
+                                parsed.fragment,
+                            ))
+                            if alt_url not in final_candidates:
+                                final_candidates.append(alt_url)
+            except Exception:
+                pass
+        return final_candidates
 
     async def download_image(self, image_url: str) -> Path:
-        """异步并发下载图片文件并返回本地路径，支持小黑盒官方 CDN 镜像容错
+        """异步并发下载图片文件并返回本地路径，优先下载 100% 原始无损大图
 
         Args:
             image_url (str): 图片直链地址
 
         Returns:
-            Path: 本地已下载图片文件的路径
+            Path: 本地已下载原图文件的路径
         """
-        # 清理图片 URL 查询参数以准确推断扩展名
+        # 清理图片 URL 查询参数以准确推断初始扩展名
         clean_url = image_url.split("?")[0]
-        if clean_url.lower().endswith(".png"):
-            extension = ".png"
-        elif clean_url.lower().endswith(".gif"):
+        if clean_url.lower().endswith(".gif"):
             extension = ".gif"
+        elif clean_url.lower().endswith(".png"):
+            extension = ".png"
         elif clean_url.lower().endswith(".webp"):
             extension = ".webp"
         else:
@@ -231,7 +263,8 @@ class Downloader:
 
         save_path = self._get_cache_path(image_url, extension)
 
-        if save_path.exists():
+        # 若已存在本地缓存且非空，直接复用
+        if save_path.exists() and save_path.stat().st_size > 0:
             return save_path
 
         candidate_urls = self._get_candidate_image_urls(image_url)
@@ -251,17 +284,34 @@ class Downloader:
                         async with httpx.AsyncClient(
                             headers=image_headers,
                             proxy=self.proxy,
-                            timeout=12.0,
+                            timeout=15.0,
                             follow_redirects=True,
                         ) as client:
                             response = await client.get(cand_url)
                             if response.status_code == 200 and len(response.content) > 0:
+                                # 根据服务器实际响应的 Content-Type 动态纠正扩展名
+                                ctype = response.headers.get("content-type", "").lower()
+                                if "gif" in ctype:
+                                    correct_ext = ".gif"
+                                elif "png" in ctype:
+                                    correct_ext = ".png"
+                                elif "webp" in ctype:
+                                    correct_ext = ".webp"
+                                else:
+                                    correct_ext = ".jpg"
+
+                                # 若推断扩展名与实际类型不一致，更新为真实扩展名
+                                if correct_ext != extension:
+                                    save_path = self._get_cache_path(image_url, correct_ext)
+
                                 async with aiofiles.open(save_path, "wb") as file:
                                     await file.write(response.content)
+
+                                logger.debug(f"[小黑盒下载器] 成功下载真实原图 ({len(response.content) / 1024:.1f} KB): {cand_url}")
                                 return save_path
                             last_err = f"HTTP {response.status_code}"
                     except Exception as req_err:
                         last_err = str(req_err)
                         continue
 
-        raise ValueError(f"下载图片失败 (尝试了 {len(candidate_urls)} 个 CDN 节点): {last_err}")
+        raise ValueError(f"下载原图失败 (尝试了 {len(candidate_urls)} 个原图与 CDN 节点): {last_err}")

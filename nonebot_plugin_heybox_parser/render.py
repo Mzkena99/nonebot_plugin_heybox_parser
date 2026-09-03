@@ -48,18 +48,18 @@ def _image_to_base64_fallback(image_path: Path) -> str:
 
 def _compress_image_for_render(
     image_path: Path,
-    max_width: int = 640,
-    quality: int = 75,
+    max_width: int = 750,
+    quality: int = 80,
 ) -> str:
     """对本地图片进行长图渲染专用的轻量化压缩与等比缩放
 
-    通过将图片宽度等比限制在长图视口物理尺寸（默认 640px）以内，并统一转为高压缩比 JPEG，
-    将单张图片的 Base64 体积由数兆暴降至数十 KB，彻底消除 Chromium 解码 4K 大图导致的显存溢出
+    通过将图片宽度等比限制在 Retina @2x 超清渲染适宜尺寸（默认 750px）以内，并统一转为高品质轻量 JPEG，
+    在确保视网膜高分屏下图片极其锐利的同时，将解码位图显存控制在极低水位，彻底根除 OOM
 
     Args:
         image_path (Path): 本地原图文件绝对路径
-        max_width (int): 渲染允许的最大物理像素宽度（默认 640px，匹配手机截屏视口）
-        quality (int): JPEG 压缩质量（默认 75，兼顾文字图像清晰度与极低体积）
+        max_width (int): 渲染允许的最大物理像素宽度（默认 750px，适配 2x 超清屏幕）
+        quality (int): JPEG 压缩质量（默认 80，兼顾超清细节与轻量体积）
 
     Returns:
         str: 优化后的 Base64 Data URI 字符串（若处理失败则安全降级）
@@ -121,12 +121,12 @@ async def render_post_to_image(
         return None
 
     try:
-        # 将本地图片路径批量等比缩放并转换为轻量 Base64 内嵌格式（固定匹配 640px 视口）
+        # 将本地图片路径批量等比缩放并转换为高清轻量 Base64 内嵌格式（适配 2x 高清屏）
         image_sources: list[str] = []
         if local_images:
             for img_path in local_images:
                 if img_path.exists():
-                    if b64_str := _compress_image_for_render(img_path, max_width=640, quality=75):
+                    if b64_str := _compress_image_for_render(img_path, max_width=750, quality=80):
                         image_sources.append(b64_str)
         elif result.pic_urls:
             image_sources = result.pic_urls
@@ -223,15 +223,16 @@ async def render_post_to_image(
             clean_url=result.clean_url or (f"https://www.xiaoheihe.cn/bbs/post_share?link_id={result.link_id}" if result.link_id else None),
         )
 
-        # 调用 html_to_pic 生成类似手机长截屏的高清长图
-        # 将 viewport 宽度调整为 640px，device_scale_factor 设为 1.0（消除超采样导致的显存几何级暴涨）
+        # 调用 html_to_pic 生成类似手机长截屏的视网膜级超清长图
+        # 将 device_scale_factor 提升至 2.0（Retina @2x 超清光栅化），使文字具有极高密度的平滑次像素抗锯齿
+        # 导出质量提升至 90，彻底消除文字边缘微小的 JPEG 压缩噪点
         pic_bytes = await html_to_pic(
             html=rendered_html,
             wait=0,
             type="jpeg",
-            quality=80,
+            quality=90,
             viewport={"width": 640, "height": 100},
-            device_scale_factor=1.0,
+            device_scale_factor=2.0,
         )
         return pic_bytes
 

@@ -23,7 +23,7 @@ class Config(BaseModel):
     )
     heybox_forward_threshold_images: int = Field(default=3, description="触发合并转发的图片张数阈值（超过此数量触发，即 >3 张）")
     heybox_forward_threshold_length: int = Field(default=100, description="触发合并转发的正文字数阈值（超过此字数触发，即 >100 字）")
-    heybox_max_images_forward: int = Field(default=30, description="合并转发模式下最多允许发送的图片数量")
+    heybox_max_images_forward: int = Field(default=50, description="合并转发模式下最多允许发送的图片数量")
     heybox_forward_image_type: Literal["path", "base64"] = Field(
         default="path",
         description="合并转发中图片消息段的传输格式：path（本地文件路径，默认，极低内存消耗）、base64（Base64内联数据流，强力图床转存）",
