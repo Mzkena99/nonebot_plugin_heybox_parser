@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import html
 import re
 from pathlib import Path
@@ -114,16 +115,26 @@ async def send_forward_post(
             )
 
         # 节点 3...N：图集图片（突破 9 张限制，按上限配置完整发送）
+        # 将本地图片转换为 Base64 编码以 base64:// 协议发送，
+        # 确保 OneBot 协议端能直接上传图片流至腾讯持久化图床，避免本地路径导致图片即时过期
         max_images = plugin_config.heybox_max_images_forward
         for img_path in local_images[:max_images]:
             if img_path.exists():
-                nodes.append(
-                    MessageSegment.node_custom(
-                        user_id=sender_id,
-                        nickname=result.author or "小黑盒用户",
-                        content=Message(MessageSegment.image(img_path)),
+                try:
+                    # 读取本地图片文件的二进制数据并进行 Base64 编码
+                    with open(img_path, "rb") as f:
+                        img_base64 = base64.b64encode(f.read()).decode("utf-8")
+                    # 使用 base64:// 协议构建图片消息段并挂载到转发节点
+                    nodes.append(
+                        MessageSegment.node_custom(
+                            user_id=sender_id,
+                            nickname=result.author or "小黑盒用户",
+                            content=Message(MessageSegment.image(f"base64://{img_base64}")),
+                        )
                     )
-                )
+                except Exception as img_err:
+                    # 若单张图片转换失败则记录警告日志并继续处理下一张图片
+                    logger.warning(f"[小黑盒解析] 合并转发图片编码 Base64 失败 ({img_path}): {img_err}")
 
         # 根据消息事件类型调用对应的合并转发 API
         if isinstance(event, GroupMessageEvent):
@@ -224,9 +235,36 @@ async def handle_heybox_share(bot: Bot, event: MessageEvent):
             or desc_length > plugin_config.heybox_forward_threshold_length
         )
 
-        # 触发打包聊天记录分支：仅在满足阈值时渲染 HTML 长图，并附加发送合并转发聊天记录
-        if is_heavy_content and plugin_config.heybox_render_mode != "direct":
-            # 步骤 1：仅在触发打包条件下尝试渲染 HTML 长图并发送
+        # 分支 1：显式配置为长图模式（image），仅渲染并发送长图，不在外部追加合并转发
+        if plugin_config.heybox_render_mode == "image" and HAS_HTMLRENDER:
+            try:
+                # 渲染 HTML 长图字节流
+                pic_bytes = await render_post_to_image(result, local_images)
+                if pic_bytes:
+                    render_msg = Message([
+                        MessageSegment.text(f"【小黑盒】{result.title}\n链接: {display_url}\n"),
+                        MessageSegment.image(pic_bytes),
+                    ])
+                    await heybox_matcher.send(render_msg)
+                    return
+            except Exception as render_err:
+                logger.warning(f"[小黑盒解析] 长图生成失败 ({render_err})，降级为后续逻辑处理")
+
+        # 分支 2：触发打包聊天记录分支（auto 模式下满足阈值或显式配置为 forward 模式）
+        # 满足条件时直接发送合并转发聊天记录，外部不再重复发送长图或任何额外文本
+        if (is_heavy_content or plugin_config.heybox_render_mode == "forward") and plugin_config.heybox_render_mode != "direct":
+            forward_success = await send_forward_post(
+                bot=bot,
+                event=event,
+                result=result,
+                local_images=local_images,
+                display_url=display_url,
+            )
+            # 发送成功则直接退出，确保外部不会再发一遍信息
+            if forward_success:
+                return
+
+            # 合并转发失败时的降级方案：若支持 HTML 渲染则优先以单张长图降级发送
             if HAS_HTMLRENDER:
                 try:
                     pic_bytes = await render_post_to_image(result, local_images)
@@ -236,19 +274,9 @@ async def handle_heybox_share(bot: Bot, event: MessageEvent):
                             MessageSegment.image(pic_bytes),
                         ])
                         await heybox_matcher.send(render_msg)
+                        return
                 except Exception as render_err:
-                    logger.warning(f"[小黑盒解析] 长图生成失败 ({render_err})，跳过长图直接发送聊天记录")
-
-            # 步骤 2：再加上打包的聊天记录（合并转发）
-            forward_success = await send_forward_post(
-                bot=bot,
-                event=event,
-                result=result,
-                local_images=local_images,
-                display_url=display_url,
-            )
-            if forward_success:
-                return
+                    logger.warning(f"[小黑盒解析] 降级长图生成失败 ({render_err})，继续降级为普通图文")
 
         # 普通直接发送分支（未触发打包阈值的少图/短文轻量动态，或合并转发异常降级）
         msg_header = f"【小黑盒】{result.title}\n作者: {result.author or '匿名'}\n链接: {display_url}"

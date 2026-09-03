@@ -19,7 +19,7 @@ classifiers = [
     "Framework :: AsyncIO",
 ]
 packages = [
-    { include = "nonebot_plugin_heybox_parser", from = ".." }
+    { include = "nonebot_plugin_heybox_parser" }
 ]
 
 [tool.poetry.dependencies]
