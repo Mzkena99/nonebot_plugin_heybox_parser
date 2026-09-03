@@ -155,6 +155,73 @@
             margin-bottom: 14px;
         }
 
+        /* 专栏富文本深度还原样式（与小黑盒页面体验保持一致） */
+        .article-rich-text {
+            font-size: 15px;
+            line-height: 1.8;
+            color: #d1d5db;
+            word-break: break-word;
+            margin-bottom: 12px;
+        }
+        .article-rich-text p {
+            margin-bottom: 12px;
+            line-height: 1.8;
+            letter-spacing: 0.2px;
+        }
+        .article-rich-text p:empty {
+            display: none;
+        }
+        .article-rich-text b,
+        .article-rich-text strong {
+            color: #ffffff;
+            font-weight: 700;
+        }
+        .article-rich-text a {
+            color: #60a5fa;
+            text-decoration: none;
+            border-bottom: 1px dashed rgba(96, 165, 250, 0.4);
+        }
+        .article-rich-text img {
+            width: 100%;
+            max-width: 100%;
+            height: auto;
+            border-radius: 8px;
+            margin: 10px 0;
+            display: block;
+            background-color: #17181c;
+        }
+        .article-rich-text blockquote {
+            border-left: 3px solid #3b82f6;
+            background: #23262f;
+            padding: 8px 12px;
+            margin: 12px 0;
+            border-radius: 0 6px 6px 0;
+            color: #9ca3af;
+        }
+        .article-rich-text pre,
+        .article-rich-text code {
+            font-family: Consolas, Monaco, "Courier New", monospace;
+            background: #141518;
+            border-radius: 4px;
+            font-size: 13px;
+        }
+        .article-rich-text code {
+            padding: 2px 6px;
+            color: #f59e0b;
+        }
+        .article-rich-text pre {
+            padding: 12px;
+            overflow-x: auto;
+            margin: 12px 0;
+        }
+        .article-rich-text h1,
+        .article-rich-text h2,
+        .article-rich-text h3 {
+            color: #ffffff;
+            margin: 18px 0 10px 0;
+            font-weight: 700;
+        }
+
         /* 结构化富文本块 */
         .block-text {
             font-size: 15px;
@@ -452,6 +519,10 @@
                 {% for block in blocks %}
                     {% if block.type == "text" and block.text %}
                     <div class="block-text">{{ block.text }}</div>
+                    {% elif block.type == "html" and block.html %}
+                    <div class="article-rich-text">
+                        {{ block.html | safe }}
+                    </div>
                     {% elif block.type == "img" and block.src %}
                     <div class="block-img">
                         <img src="{{ block.src }}" alt="post-img" />

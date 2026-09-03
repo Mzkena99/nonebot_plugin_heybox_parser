@@ -728,12 +728,31 @@ class HeyboxParser:
                 if text_content.strip().startswith("["):
                     try:
                         raw_blocks = json.loads(text_content)
+                        # 提取常规文本分块
                         text_parts = [
                             b.get("text", "").strip()
                             for b in raw_blocks
                             if isinstance(b, dict) and b.get("type") == "text" and b.get("text")
                         ]
                         full_text = "\n".join(filter(None, text_parts)).strip()
+
+                        # 针对专栏长文：从 type == 'html' 分块中提取格式化纯文本段落
+                        html_parts = []
+                        for b in raw_blocks:
+                            if isinstance(b, dict) and b.get("type") == "html" and (raw_ht := b.get("text")):
+                                # 将段落闭合标签与换行标签转换为自然换行，去除其它标签得到纯净段落
+                                text_clean = re.sub(r"<\s*/?p[^>]*>", "\n", raw_ht)
+                                text_clean = re.sub(r"<\s*br\s*/?>", "\n", text_clean)
+                                text_clean = re.sub(r"<[^>]+>", "", text_clean)
+                                text_clean = html.unescape(text_clean).strip()
+                                if text_clean:
+                                    html_parts.append(text_clean)
+
+                        if html_parts:
+                            full_html_text = "\n\n".join(html_parts).strip()
+                            if len(full_html_text) > len(full_text):
+                                full_text = full_html_text
+
                         # 若分块文本比短描述更完整，则以完整分块文本为准
                         if full_text and len(full_text) > len(description):
                             description = full_text

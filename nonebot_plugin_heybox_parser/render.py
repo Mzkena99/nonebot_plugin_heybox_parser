@@ -131,33 +131,80 @@ async def render_post_to_image(
         elif result.pic_urls:
             image_sources = result.pic_urls
 
-        # 处理富文本分块中的图片内嵌（完整保留所有正文段落与全部插图）
+        # 判断是否为含有完整 HTML 富文本排版的专栏文章
+        has_html_article = any(
+            isinstance(b, dict) and b.get("type") == "html" and b.get("text")
+            for b in (result.blocks or [])
+        )
+
         processed_blocks: list[dict] = []
         img_idx = 0
-        if result.blocks:
+
+        if has_html_article:
+            # 专栏文章模式：解析 HTML 内容，将内嵌插图精准替换为本地等比压缩的轻量 Base64 数据
+            from bs4 import BeautifulSoup
+
             for block in result.blocks:
                 if not isinstance(block, dict):
                     continue
                 b_type = block.get("type")
-                if b_type == "text":
-                    processed_blocks.append({
-                        "type": "text",
-                        "text": block.get("text", "").strip(),
-                    })
-                elif b_type == "img":
-                    # 优先使用本地等比压缩后的轻量 Base64 缓存图片
-                    img_src = image_sources[img_idx] if img_idx < len(image_sources) else block.get("url") or block.get("src")
-                    img_idx += 1
-                    processed_blocks.append({
-                        "type": "img",
-                        "src": img_src,
-                    })
+                if b_type == "html" and (raw_html := block.get("text")):
+                    try:
+                        soup = BeautifulSoup(raw_html, "html.parser")
+                        img_tags = soup.find_all("img")
+                        for tag in img_tags:
+                            orig_url = tag.get("data-original") or tag.get("src")
+                            # 优先匹配本地等比压缩后的轻量 Base64 插图（按正文出现的先后顺序精准对应）
+                            if img_idx < len(image_sources):
+                                tag["src"] = image_sources[img_idx]
+                                img_idx += 1
+                            elif orig_url:
+                                tag["src"] = orig_url
+
+                        # 生成替换插图后的完整富文本 HTML 结构
+                        processed_blocks.append({
+                            "type": "html",
+                            "html": str(soup),
+                        })
+                    except Exception as parse_err:
+                        logger.warning(f"[小黑盒渲染] 专栏 HTML 富文本解析异常: {parse_err}")
+                        processed_blocks.append({
+                            "type": "html",
+                            "html": raw_html,
+                        })
                 elif b_type == "game":
                     processed_blocks.append({
                         "type": "game",
                         "name": block.get("name") or block.get("title", ""),
                         "score": block.get("score") or block.get("rating"),
                     })
+                # 注意：专栏文章中，所有插图已按原作者排版穿插在正文段落之间，因此跳过末尾冗余的重复 img 分块
+        else:
+            # 常规图文/轻量动态模式
+            if result.blocks:
+                for block in result.blocks:
+                    if not isinstance(block, dict):
+                        continue
+                    b_type = block.get("type")
+                    if b_type == "text":
+                        processed_blocks.append({
+                            "type": "text",
+                            "text": block.get("text", "").strip(),
+                        })
+                    elif b_type == "img":
+                        # 优先使用本地等比压缩后的轻量 Base64 缓存图片
+                        img_src = image_sources[img_idx] if img_idx < len(image_sources) else block.get("url") or block.get("src")
+                        img_idx += 1
+                        processed_blocks.append({
+                            "type": "img",
+                            "src": img_src,
+                        })
+                    elif b_type == "game":
+                        processed_blocks.append({
+                            "type": "game",
+                            "name": block.get("name") or block.get("title", ""),
+                            "score": block.get("score") or block.get("rating"),
+                        })
 
         # 准备模板上下文变量
         template = jinja_env.get_template("post.html")
