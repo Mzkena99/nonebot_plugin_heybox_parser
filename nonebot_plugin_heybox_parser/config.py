@@ -15,6 +15,8 @@ class Config(BaseModel):
     heybox_proxy: str | None = Field(default=None, description="HTTP/HTTPS 请求代理地址")
     heybox_cookie: str = Field(default="", description="小黑盒合法 Session Cookie，配置后可完全绕过 show_captcha 验证码风控")
     heybox_clean_url: bool = Field(default=True, description="是否去除分享链接中的多余跟踪参数")
+    # 是否渲染生成外层预览长图（默认开启；若设为 False 则完全跳过浏览器渲染，直接发送合并转发，极度节省内存）
+    heybox_enable_render_image: bool = Field(default=True, description="是否渲染外层预览长图（默认开启；若关闭则直接发送聊天记录）")
     heybox_render_mode: Literal["auto", "forward", "image", "direct"] = Field(
         default="auto",
         description="消息呈现模式：auto（智能选择）、forward（合并转发）、image（HTML长图）、direct（普通直接发送）",

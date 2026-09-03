@@ -43,6 +43,7 @@ pip install -e /path/to/nonebot-plugin-heybox-parser
 | `HEYBOX_AUTO_PARSE` | `bool` | `True` | 是否自动解析消息中的小黑盒链接 |
 | `HEYBOX_CLEAN_URL` | `bool` | `True` | 是否自动精简分享链接多余参数 |
 | `HEYBOX_RENDER_MODE` | `str` | `"auto"` | 呈现模式：`auto` / `forward` / `image` / `direct` |
+| `HEYBOX_ENABLE_RENDER_IMAGE` | `bool` | `True` | 是否生成外层长图卡片（开启为手机长截屏模式；关闭则只发聊天记录） |
 | `HEYBOX_FORWARD_THRESHOLD_IMAGES` | `int` | `3` | 触发合并转发的图片张数阈值（>3张触发） |
 | `HEYBOX_FORWARD_THRESHOLD_LENGTH` | `int` | `100` | 触发合并转发的正文字数阈值（>100字触发） |
 | `HEYBOX_MAX_IMAGES_FORWARD` | `int` | `30` | 合并转发最多允许发送的图片数量 |

@@ -240,10 +240,17 @@ async def handle_heybox_share(bot: Bot, event: MessageEvent):
         )
 
         # 分支 1：显式配置为长图模式（image），仅渲染并发送长图，不在外部追加合并转发
-        if plugin_config.heybox_render_mode == "image" and HAS_HTMLRENDER:
+        if (
+            plugin_config.heybox_render_mode == "image"
+            and HAS_HTMLRENDER
+            and plugin_config.heybox_enable_render_image
+        ):
             try:
-                # 渲染 HTML 长图字节流
-                pic_bytes = await render_post_to_image(result, local_images)
+                # 渲染 HTML 长图字节流（增加 30 秒限时保护）
+                pic_bytes = await asyncio.wait_for(
+                    render_post_to_image(result, local_images),
+                    timeout=30.0,
+                )
                 if pic_bytes:
                     render_msg = Message([
                         MessageSegment.text(f"【小黑盒】{result.title}\n链接: {display_url}\n"),
@@ -251,23 +258,31 @@ async def handle_heybox_share(bot: Bot, event: MessageEvent):
                     ])
                     await heybox_matcher.send(render_msg)
                     return
+            except asyncio.TimeoutError:
+                logger.warning("[小黑盒解析] 长图生成超时（>30s），降级为后续逻辑处理")
             except Exception as render_err:
                 logger.warning(f"[小黑盒解析] 长图生成失败 ({render_err})，降级为后续逻辑处理")
 
         # 分支 2：触发打包聊天记录分支（auto 模式下满足阈值或显式配置为 forward 模式）
-        # 按照需求：精美排版的压缩长图在群聊外层直接发送（自动本地缓存不过期），
+        # 按照设计：精美排版的压缩长图在群聊外层直接发送（自动本地缓存不过期），
         # 帖子的具体正文内容与所有单张高清原图则打包在合并转发聊天记录内部发送（方便存图与复制）
         if (is_heavy_content or plugin_config.heybox_render_mode == "forward") and plugin_config.heybox_render_mode != "direct":
-            # 步骤 1：若支持 HTML 渲染，先在外部发送排版精美的高清长图
-            if HAS_HTMLRENDER:
+            # 步骤 1：若启用且支持 HTML 渲染，先在外部发送排版精美的手机截屏级高清长图
+            if HAS_HTMLRENDER and plugin_config.heybox_enable_render_image:
                 try:
-                    pic_bytes = await render_post_to_image(result, local_images)
+                    # 调用长图生成，设定 30 秒超时安全隔离
+                    pic_bytes = await asyncio.wait_for(
+                        render_post_to_image(result, local_images),
+                        timeout=30.0,
+                    )
                     if pic_bytes:
                         render_msg = Message([
                             MessageSegment.text(f"【小黑盒】{result.title}\n链接: {display_url}\n"),
                             MessageSegment.image(pic_bytes),
                         ])
                         await heybox_matcher.send(render_msg)
+                except asyncio.TimeoutError:
+                    logger.warning("[小黑盒解析] 外层长图渲染超时（>30s），跳过长图直接发送聊天记录")
                 except Exception as render_err:
                     logger.warning(f"[小黑盒解析] 外层长图发送失败 ({render_err})，跳过长图直接发送聊天记录")
 
