@@ -66,6 +66,7 @@ async def send_forward_post(
     result: HeyboxParseResult,
     local_images: list[Path],
     display_url: str,
+    render_image: bytes | None = None,
 ) -> bool:
     """将小黑盒解析内容打包为 OneBot V11 合并转发消息节点并发送
 
@@ -75,6 +76,7 @@ async def send_forward_post(
         result (HeyboxParseResult): 小黑盒解析结果数据模型
         local_images (list[Path]): 本地已下载缓存的图片路径列表
         display_url (str): 格式化展示的小黑盒链接
+        render_image (bytes | None): 预渲染生成的 HTML 长图二进制字节流，若提供则作为节点打包进聊天记录
 
     Returns:
         bool: 发送是否成功（若协议端不支持或发送异常返回 False，便于自动降级）
@@ -104,7 +106,23 @@ async def send_forward_post(
             )
         )
 
-        # 节点 2：正文完整描述（若有）
+        # 节点 2：排版精美的 HTML 长图（若成功渲染，以 Base64 方式打包进聊天记录）
+        if render_image:
+            try:
+                # 将长图二进制数据转换为 Base64 编码字符串
+                b64_render = base64.b64encode(render_image).decode("utf-8")
+                nodes.append(
+                    MessageSegment.node_custom(
+                        user_id=sender_id,
+                        nickname="小黑盒长图",
+                        content=Message(MessageSegment.image(f"base64://{b64_render}")),
+                    )
+                )
+            except Exception as render_node_err:
+                # 长图节点打包失败时记录警告，不影响后续正文与原图发送
+                logger.warning(f"[小黑盒解析] 打包长图节点失败: {render_node_err}")
+
+        # 节点 3：正文完整描述文本（方便用户长按复制文本内容）
         if result.description:
             nodes.append(
                 MessageSegment.node_custom(
@@ -251,16 +269,26 @@ async def handle_heybox_share(bot: Bot, event: MessageEvent):
                 logger.warning(f"[小黑盒解析] 长图生成失败 ({render_err})，降级为后续逻辑处理")
 
         # 分支 2：触发打包聊天记录分支（auto 模式下满足阈值或显式配置为 forward 模式）
-        # 满足条件时直接发送合并转发聊天记录，外部不再重复发送长图或任何额外文本
+        # 满足条件时直接发送合并转发聊天记录，并将 HTML 长图作为其中一个节点打包发送，外部不重复发送
         if (is_heavy_content or plugin_config.heybox_render_mode == "forward") and plugin_config.heybox_render_mode != "direct":
+            # 若支持 HTML 渲染，先异步渲染出高清长图数据，以便打包进聊天记录中
+            render_bytes = None
+            if HAS_HTMLRENDER:
+                try:
+                    render_bytes = await render_post_to_image(result, local_images)
+                except Exception as render_err:
+                    logger.warning(f"[小黑盒解析] 嵌入聊天记录的长图生成失败 ({render_err})，仅打包文本与图集")
+
+            # 发送打包好的合并转发消息（包含基本信息节点、长图节点、正文节点、所有原图图集节点）
             forward_success = await send_forward_post(
                 bot=bot,
                 event=event,
                 result=result,
                 local_images=local_images,
                 display_url=display_url,
+                render_image=render_bytes,
             )
-            # 发送成功则直接退出，确保外部不会再发一遍信息
+            # 发送成功则直接退出，确保外部不会再多发一条消息
             if forward_success:
                 return
 
