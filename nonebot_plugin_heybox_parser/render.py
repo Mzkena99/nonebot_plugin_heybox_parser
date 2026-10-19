@@ -1,4 +1,5 @@
 import base64
+import io
 from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader
@@ -7,7 +8,7 @@ from nonebot.plugin import require
 
 from .data import HeyboxParseResult
 
-# 模板目录与 Jinja2 环境初始化
+# 模板目录与 Jinja2 渲染环境初始化
 TEMPLATE_DIR = Path(__file__).parent / "templates"
 jinja_env = Environment(
     loader=FileSystemLoader(str(TEMPLATE_DIR)),
@@ -25,8 +26,8 @@ except Exception:
     HAS_HTMLRENDER = False
 
 
-def _image_to_base64(image_path: Path) -> str:
-    """将本地图片文件转换为 Base64 Data URI，方便无头浏览器直接内嵌加载
+def _image_to_base64_fallback(image_path: Path) -> str:
+    """回退降级方案：直接读取本地图片文件并转换为 Base64 编码
 
     Args:
         image_path (Path): 本地图片文件路径
@@ -41,15 +42,72 @@ def _image_to_base64(image_path: Path) -> str:
             encoded = base64.b64encode(f.read()).decode("utf-8")
         return f"data:{mime_type};base64,{encoded}"
     except Exception as err:
-        logger.warning(f"[小黑盒渲染] 本地图片转 Base64 失败 ({image_path}): {err}")
+        logger.warning(f"[小黑盒渲染] 本地图片降级转 Base64 失败 ({image_path}): {err}")
         return ""
+
+
+def _compress_image_for_render(
+    image_path: Path,
+    max_width: int = 750,
+    quality: int = 80,
+) -> str:
+    """对本地图片进行长图渲染专用的轻量化压缩与等比缩放
+
+    通过将图片宽度等比限制在 Retina @2x 超清渲染适宜尺寸（默认 750px）以内，并统一转为高品质轻量 JPEG，
+    在确保视网膜高分屏下图片极其锐利的同时，将解码位图显存控制在极低水位，彻底根除 OOM
+
+    Args:
+        image_path (Path): 本地原图文件绝对路径
+        max_width (int): 渲染允许的最大物理像素宽度（默认 750px，适配 2x 超清屏幕）
+        quality (int): JPEG 压缩质量（默认 80，兼顾超清细节与轻量体积）
+
+    Returns:
+        str: 优化后的 Base64 Data URI 字符串（若处理失败则安全降级）
+    """
+    try:
+        from PIL import Image, ImageOps
+
+        # 使用 PIL 读取本地图片
+        with Image.open(image_path) as img:
+            # 自动处理手机拍摄等场景下的 EXIF 旋转朝向，确保图片方向正确
+            img = ImageOps.exif_transpose(img)
+
+            # 获取原始像素宽高
+            orig_w, orig_h = img.size
+
+            # 若图片宽度超过长图视口最大宽度，按比例平滑缩小
+            if orig_w > max_width:
+                scale_ratio = max_width / float(orig_w)
+                new_h = max(1, int(orig_h * scale_ratio))
+                # 使用高质量 Lanczos 重采样算法平滑缩放图片
+                img = img.resize((max_width, new_h), Image.Resampling.LANCZOS)
+
+            # 统一转换为 RGB 模式（若原图包含透明通道则使用纯黑背景填充以贴合深色主题）
+            if img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info):
+                background = Image.new("RGB", img.size, (30, 32, 37))
+                alpha_channel = img.convert("RGBA").split()[3]
+                background.paste(img.convert("RGB"), mask=alpha_channel)
+                img = background
+            elif img.mode != "RGB":
+                img = img.convert("RGB")
+
+            # 保存压缩数据至内存字节流
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=quality, optimize=True)
+            buf.seek(0)
+            encoded = base64.b64encode(buf.getvalue()).decode("utf-8")
+            return f"data:image/jpeg;base64,{encoded}"
+
+    except Exception as err:
+        logger.warning(f"[小黑盒渲染] 图片轻量等比压缩失败，尝试回退原始读取 ({image_path}): {err}")
+        return _image_to_base64_fallback(image_path)
 
 
 async def render_post_to_image(
     result: HeyboxParseResult,
     local_images: list[Path] | None = None,
 ) -> bytes | None:
-    """将小黑盒图文解析结果渲染为长图字节流
+    """将小黑盒图文解析结果渲染为手机长截屏级别的精美长图字节流
 
     Args:
         result (HeyboxParseResult): 小黑盒解析结果数据模型
@@ -63,43 +121,90 @@ async def render_post_to_image(
         return None
 
     try:
-        # 将本地图片路径批量转换为 Base64 内嵌格式
+        # 将本地图片路径批量等比缩放并转换为高清轻量 Base64 内嵌格式（适配 2x 高清屏）
         image_sources: list[str] = []
         if local_images:
             for img_path in local_images:
                 if img_path.exists():
-                    if b64_str := _image_to_base64(img_path):
+                    if b64_str := _compress_image_for_render(img_path, max_width=750, quality=80):
                         image_sources.append(b64_str)
         elif result.pic_urls:
             image_sources = result.pic_urls
 
-        # 处理富文本分块中的图片内嵌
+        # 判断是否为含有完整 HTML 富文本排版的专栏文章
+        has_html_article = any(
+            isinstance(b, dict) and b.get("type") == "html" and b.get("text")
+            for b in (result.blocks or [])
+        )
+
         processed_blocks: list[dict] = []
         img_idx = 0
-        if result.blocks:
+
+        if has_html_article:
+            # 专栏文章模式：解析 HTML 内容，将内嵌插图精准替换为本地等比压缩的轻量 Base64 数据
+            from bs4 import BeautifulSoup
+
             for block in result.blocks:
                 if not isinstance(block, dict):
                     continue
                 b_type = block.get("type")
-                if b_type == "text":
-                    processed_blocks.append({
-                        "type": "text",
-                        "text": block.get("text", "").strip(),
-                    })
-                elif b_type == "img":
-                    # 优先使用本地 Base64 缓存图片
-                    img_src = image_sources[img_idx] if img_idx < len(image_sources) else block.get("url") or block.get("src")
-                    img_idx += 1
-                    processed_blocks.append({
-                        "type": "img",
-                        "src": img_src,
-                    })
+                if b_type == "html" and (raw_html := block.get("text")):
+                    try:
+                        soup = BeautifulSoup(raw_html, "html.parser")
+                        img_tags = soup.find_all("img")
+                        for tag in img_tags:
+                            orig_url = tag.get("data-original") or tag.get("src")
+                            # 优先匹配本地等比压缩后的轻量 Base64 插图（按正文出现的先后顺序精准对应）
+                            if img_idx < len(image_sources):
+                                tag["src"] = image_sources[img_idx]
+                                img_idx += 1
+                            elif orig_url:
+                                tag["src"] = orig_url
+
+                        # 生成替换插图后的完整富文本 HTML 结构
+                        processed_blocks.append({
+                            "type": "html",
+                            "html": str(soup),
+                        })
+                    except Exception as parse_err:
+                        logger.warning(f"[小黑盒渲染] 专栏 HTML 富文本解析异常: {parse_err}")
+                        processed_blocks.append({
+                            "type": "html",
+                            "html": raw_html,
+                        })
                 elif b_type == "game":
                     processed_blocks.append({
                         "type": "game",
                         "name": block.get("name") or block.get("title", ""),
                         "score": block.get("score") or block.get("rating"),
                     })
+                # 注意：专栏文章中，所有插图已按原作者排版穿插在正文段落之间，因此跳过末尾冗余的重复 img 分块
+        else:
+            # 常规图文/轻量动态模式
+            if result.blocks:
+                for block in result.blocks:
+                    if not isinstance(block, dict):
+                        continue
+                    b_type = block.get("type")
+                    if b_type == "text":
+                        processed_blocks.append({
+                            "type": "text",
+                            "text": block.get("text", "").strip(),
+                        })
+                    elif b_type == "img":
+                        # 优先使用本地等比压缩后的轻量 Base64 缓存图片
+                        img_src = image_sources[img_idx] if img_idx < len(image_sources) else block.get("url") or block.get("src")
+                        img_idx += 1
+                        processed_blocks.append({
+                            "type": "img",
+                            "src": img_src,
+                        })
+                    elif b_type == "game":
+                        processed_blocks.append({
+                            "type": "game",
+                            "name": block.get("name") or block.get("title", ""),
+                            "score": block.get("score") or block.get("rating"),
+                        })
 
         # 准备模板上下文变量
         template = jinja_env.get_template("post.html")
@@ -118,13 +223,16 @@ async def render_post_to_image(
             clean_url=result.clean_url or (f"https://www.xiaoheihe.cn/bbs/post_share?link_id={result.link_id}" if result.link_id else None),
         )
 
-        # 调用 html_to_pic 生成长图（设置精准视口宽度，杜绝多余左右黑边）
+        # 调用 html_to_pic 生成类似手机长截屏的视网膜级超清长图
+        # 将 device_scale_factor 提升至 2.0（Retina @2x 超清光栅化），使文字具有极高密度的平滑次像素抗锯齿
+        # 导出质量提升至 90，彻底消除文字边缘微小的 JPEG 压缩噪点
         pic_bytes = await html_to_pic(
             html=rendered_html,
             wait=0,
-            type="png",
-            viewport={"width": 680, "height": 100},
-            device_scale_factor=2,  # 提升高分屏清晰度
+            type="jpeg",
+            quality=90,
+            viewport={"width": 640, "height": 100},
+            device_scale_factor=2.0,
         )
         return pic_bytes
 

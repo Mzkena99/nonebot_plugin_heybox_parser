@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import html
 import re
 from pathlib import Path
@@ -66,7 +67,7 @@ async def send_forward_post(
     local_images: list[Path],
     display_url: str,
 ) -> bool:
-    """将小黑盒解析内容打包为 OneBot V11 合并转发消息节点并发送
+    """将小黑盒具体内容与原图图集打包为 OneBot V11 合并转发消息节点并发送
 
     Args:
         bot (Bot): OneBot V11 Bot 实例
@@ -103,7 +104,7 @@ async def send_forward_post(
             )
         )
 
-        # 节点 2：正文完整描述（若有）
+        # 节点 2：正文完整描述文本（具体内容，方便群友长按复制）
         if result.description:
             nodes.append(
                 MessageSegment.node_custom(
@@ -114,16 +115,30 @@ async def send_forward_post(
             )
 
         # 节点 3...N：图集图片（突破 9 张限制，按上限配置完整发送）
+        # 根据配置动态选择传输格式：默认采用本地路径（内存零开销），亦支持切换为 Base64 强制图床转存
         max_images = plugin_config.heybox_max_images_forward
         for img_path in local_images[:max_images]:
             if img_path.exists():
-                nodes.append(
-                    MessageSegment.node_custom(
-                        user_id=sender_id,
-                        nickname=result.author or "小黑盒用户",
-                        content=Message(MessageSegment.image(img_path)),
+                try:
+                    if plugin_config.heybox_forward_image_type == "base64":
+                        # 读取本地图片文件的二进制数据并转换为 Base64 编码字符串
+                        with open(img_path, "rb") as f:
+                            img_base64 = base64.b64encode(f.read()).decode("utf-8")
+                        img_segment = MessageSegment.image(f"base64://{img_base64}")
+                    else:
+                        # 默认使用本地文件路径构建图片消息段（极低内存开销，适配新版协议端）
+                        img_segment = MessageSegment.image(img_path)
+
+                    nodes.append(
+                        MessageSegment.node_custom(
+                            user_id=sender_id,
+                            nickname=result.author or "小黑盒用户",
+                            content=Message(img_segment),
+                        )
                     )
-                )
+                except Exception as img_err:
+                    # 若单张图片构建失败则记录警告日志并继续处理下一张图片
+                    logger.warning(f"[小黑盒解析] 合并转发图片节点构建失败 ({img_path}): {img_err}")
 
         # 根据消息事件类型调用对应的合并转发 API
         if isinstance(event, GroupMessageEvent):
@@ -224,22 +239,54 @@ async def handle_heybox_share(bot: Bot, event: MessageEvent):
             or desc_length > plugin_config.heybox_forward_threshold_length
         )
 
-        # 触发打包聊天记录分支：仅在满足阈值时渲染 HTML 长图，并附加发送合并转发聊天记录
-        if is_heavy_content and plugin_config.heybox_render_mode != "direct":
-            # 步骤 1：仅在触发打包条件下尝试渲染 HTML 长图并发送
-            if HAS_HTMLRENDER:
+        # 分支 1：显式配置为长图模式（image），仅渲染并发送长图，不在外部追加合并转发
+        if (
+            plugin_config.heybox_render_mode == "image"
+            and HAS_HTMLRENDER
+            and plugin_config.heybox_enable_render_image
+        ):
+            try:
+                # 渲染 HTML 长图字节流（增加 30 秒限时保护）
+                pic_bytes = await asyncio.wait_for(
+                    render_post_to_image(result, local_images),
+                    timeout=30.0,
+                )
+                if pic_bytes:
+                    render_msg = Message([
+                        MessageSegment.text(f"【小黑盒】{result.title}\n链接: {display_url}\n"),
+                        MessageSegment.image(pic_bytes),
+                    ])
+                    await heybox_matcher.send(render_msg)
+                    return
+            except asyncio.TimeoutError:
+                logger.warning("[小黑盒解析] 长图生成超时（>30s），降级为后续逻辑处理")
+            except Exception as render_err:
+                logger.warning(f"[小黑盒解析] 长图生成失败 ({render_err})，降级为后续逻辑处理")
+
+        # 分支 2：触发打包聊天记录分支（auto 模式下满足阈值或显式配置为 forward 模式）
+        # 按照设计：精美排版的压缩长图在群聊外层直接发送（自动本地缓存不过期），
+        # 帖子的具体正文内容与所有单张高清原图则打包在合并转发聊天记录内部发送（方便存图与复制）
+        if (is_heavy_content or plugin_config.heybox_render_mode == "forward") and plugin_config.heybox_render_mode != "direct":
+            # 步骤 1：若启用且支持 HTML 渲染，先在外部发送排版精美的手机截屏级高清长图
+            if HAS_HTMLRENDER and plugin_config.heybox_enable_render_image:
                 try:
-                    pic_bytes = await render_post_to_image(result, local_images)
+                    # 调用长图生成，设定 30 秒超时安全隔离
+                    pic_bytes = await asyncio.wait_for(
+                        render_post_to_image(result, local_images),
+                        timeout=30.0,
+                    )
                     if pic_bytes:
                         render_msg = Message([
                             MessageSegment.text(f"【小黑盒】{result.title}\n链接: {display_url}\n"),
                             MessageSegment.image(pic_bytes),
                         ])
                         await heybox_matcher.send(render_msg)
+                except asyncio.TimeoutError:
+                    logger.warning("[小黑盒解析] 外层长图渲染超时（>30s），跳过长图直接发送聊天记录")
                 except Exception as render_err:
-                    logger.warning(f"[小黑盒解析] 长图生成失败 ({render_err})，跳过长图直接发送聊天记录")
+                    logger.warning(f"[小黑盒解析] 外层长图发送失败 ({render_err})，跳过长图直接发送聊天记录")
 
-            # 步骤 2：再加上打包的聊天记录（合并转发）
+            # 步骤 2：紧接着发送打包的合并转发聊天记录（包含具体正文内容和全部原图）
             forward_success = await send_forward_post(
                 bot=bot,
                 event=event,
@@ -247,6 +294,7 @@ async def handle_heybox_share(bot: Bot, event: MessageEvent):
                 local_images=local_images,
                 display_url=display_url,
             )
+            # 发送成功则直接退出
             if forward_success:
                 return
 

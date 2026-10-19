@@ -130,6 +130,27 @@ def clean_heybox_url(url: str = "", link_id: str | None = None) -> str:
     return f"{parsed.scheme}://{parsed.netloc}{clean_path}"
 
 
+def clean_original_image_url(url: str) -> str:
+    """清理小黑盒图片链接中的 CDN 有损裁剪与强制转码参数
+
+    小黑盒通常在图片链接尾部追加七牛云参数（如 ?imageMogr2/.../thumbnail/...），
+    剥离这些裁剪参数能够直接向 CDN 请求未压缩的高分辨率原始图片文件，
+    同时能使动态 GIF 图片保留完整的原版动画帧而不是被转为静态图
+
+    Args:
+        url (str): 带有 CDN 处理参数的图片链接
+
+    Returns:
+        str: 清理后的纯净无损原图直链
+    """
+    if not url:
+        return ""
+    # 剥离七牛云 imageMogr2 等处理参数
+    if "?imageMogr2" in url:
+        return url.split("?")[0]
+    return url
+
+
 def _format_created_at(val: int | float | str | None) -> str | None:
     """格式化时间戳或时间字符串为可读时间（如 2024-05-20 18:30）
 
@@ -539,17 +560,23 @@ class HeyboxParser:
             "shares": link_info.get("share_num") or 0,
         }
 
-        # 提取图片资源
+        # 提取图片资源并清洗为无损原图链接
         pic_urls = []
         if images := (link_info.get("images") or link_info.get("pics") or link_info.get("preview") or link_info.get("thumb") or link_info.get("cover")):
             if isinstance(images, list):
                 for img in images:
-                    if isinstance(img, dict) and (u := img.get("url") or img.get("src") or img.get("origin_url")):
-                        pic_urls.append(u)
+                    if isinstance(img, dict) and (u := img.get("origin_url") or img.get("url") or img.get("src")):
+                        clean_u = clean_original_image_url(u)
+                        if clean_u and clean_u not in pic_urls:
+                            pic_urls.append(clean_u)
                     elif isinstance(img, str):
-                        pic_urls.append(img)
+                        clean_u = clean_original_image_url(img)
+                        if clean_u and clean_u not in pic_urls:
+                            pic_urls.append(clean_u)
             elif isinstance(images, str):
-                pic_urls.append(images)
+                clean_u = clean_original_image_url(images)
+                if clean_u and clean_u not in pic_urls:
+                    pic_urls.append(clean_u)
 
         # 提取视频资源
         video_url = None
@@ -728,12 +755,31 @@ class HeyboxParser:
                 if text_content.strip().startswith("["):
                     try:
                         raw_blocks = json.loads(text_content)
+                        # 提取常规文本分块
                         text_parts = [
                             b.get("text", "").strip()
                             for b in raw_blocks
                             if isinstance(b, dict) and b.get("type") == "text" and b.get("text")
                         ]
                         full_text = "\n".join(filter(None, text_parts)).strip()
+
+                        # 针对专栏长文：从 type == 'html' 分块中提取格式化纯文本段落
+                        html_parts = []
+                        for b in raw_blocks:
+                            if isinstance(b, dict) and b.get("type") == "html" and (raw_ht := b.get("text")):
+                                # 将段落闭合标签与换行标签转换为自然换行，去除其它标签得到纯净段落
+                                text_clean = re.sub(r"<\s*/?p[^>]*>", "\n", raw_ht)
+                                text_clean = re.sub(r"<\s*br\s*/?>", "\n", text_clean)
+                                text_clean = re.sub(r"<[^>]+>", "", text_clean)
+                                text_clean = html.unescape(text_clean).strip()
+                                if text_clean:
+                                    html_parts.append(text_clean)
+
+                        if html_parts:
+                            full_html_text = "\n\n".join(html_parts).strip()
+                            if len(full_html_text) > len(full_text):
+                                full_text = full_html_text
+
                         # 若分块文本比短描述更完整，则以完整分块文本为准
                         if full_text and len(full_text) > len(description):
                             description = full_text
@@ -756,23 +802,29 @@ class HeyboxParser:
         # 优先从 post_detail 中提取图集链接
         pic_urls = []
 
-        # 方式 1: 从 images / pics 字段提取
+        # 方式 1: 从 images / pics 字段提取并清洗无损原图
         if image_list := (post_detail.get("images") or post_detail.get("pics")):
             for img_item in image_list:
                 if isinstance(img_item, dict):
-                    img_url = img_item.get("url") or img_item.get("origin_url") or img_item.get("src")
-                    if img_url and img_url not in pic_urls:
-                        pic_urls.append(img_url)
-                elif isinstance(img_item, str) and img_item not in pic_urls:
-                    pic_urls.append(img_item)
+                    img_url = img_item.get("origin_url") or img_item.get("url") or img_item.get("src")
+                    if img_url:
+                        clean_url_item = clean_original_image_url(img_url)
+                        if clean_url_item and clean_url_item not in pic_urls:
+                            pic_urls.append(clean_url_item)
+                elif isinstance(img_item, str):
+                    clean_url_item = clean_original_image_url(img_item)
+                    if clean_url_item and clean_url_item not in pic_urls:
+                        pic_urls.append(clean_url_item)
 
         # 方式 2: 小黑盒新版结构，正文图集保存在 text (JSON 字符串) 中
         if not pic_urls and raw_blocks:
             for block in raw_blocks:
                 if isinstance(block, dict) and block.get("type") == "img":
-                    img_url = block.get("url") or block.get("src") or block.get("origin_url")
-                    if img_url and img_url not in pic_urls:
-                        pic_urls.append(img_url)
+                    img_url = block.get("origin_url") or block.get("url") or block.get("src")
+                    if img_url:
+                        clean_url_item = clean_original_image_url(img_url)
+                        if clean_url_item and clean_url_item not in pic_urls:
+                            pic_urls.append(clean_url_item)
 
         # 方式 3: 若上述均未找到，退避在 post_detail 内部（排除用户头像与勋章图标）递归查找图片
         if not pic_urls:
@@ -786,13 +838,13 @@ class HeyboxParser:
                             if isinstance(v, list):
                                 for item in v:
                                     if isinstance(item, str) and ("http" in item):
-                                        imgs.append(item)
+                                        imgs.append(clean_original_image_url(item))
                                     elif isinstance(item, dict):
-                                        u = item.get("url") or item.get("origin_url") or item.get("src")
+                                        u = item.get("origin_url") or item.get("url") or item.get("src")
                                         if u:
-                                            imgs.append(u)
+                                            imgs.append(clean_original_image_url(u))
                             elif isinstance(v, str) and ("http" in v) and any(ext in v.lower() for ext in [".jpg", ".png", ".webp", ".jpeg", "maxjia", "heybox"]):
-                                imgs.append(v)
+                                imgs.append(clean_original_image_url(v))
                         else:
                             imgs.extend(find_post_images(v))
                 elif isinstance(obj, list):
@@ -801,7 +853,7 @@ class HeyboxParser:
                 return imgs
 
             for img in find_post_images(post_detail):
-                if img not in pic_urls:
+                if img and img not in pic_urls:
                     pic_urls.append(img)
 
         content = None

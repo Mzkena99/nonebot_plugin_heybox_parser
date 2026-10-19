@@ -15,13 +15,19 @@ class Config(BaseModel):
     heybox_proxy: str | None = Field(default=None, description="HTTP/HTTPS 请求代理地址")
     heybox_cookie: str = Field(default="", description="小黑盒合法 Session Cookie，配置后可完全绕过 show_captcha 验证码风控")
     heybox_clean_url: bool = Field(default=True, description="是否去除分享链接中的多余跟踪参数")
+    # 是否渲染生成外层预览长图（默认开启；若设为 False 则完全跳过浏览器渲染，直接发送合并转发，极度节省内存）
+    heybox_enable_render_image: bool = Field(default=True, description="是否渲染外层预览长图（默认开启；若关闭则直接发送聊天记录）")
     heybox_render_mode: Literal["auto", "forward", "image", "direct"] = Field(
         default="auto",
         description="消息呈现模式：auto（智能选择）、forward（合并转发）、image（HTML长图）、direct（普通直接发送）",
     )
     heybox_forward_threshold_images: int = Field(default=3, description="触发合并转发的图片张数阈值（超过此数量触发，即 >3 张）")
     heybox_forward_threshold_length: int = Field(default=100, description="触发合并转发的正文字数阈值（超过此字数触发，即 >100 字）")
-    heybox_max_images_forward: int = Field(default=30, description="合并转发模式下最多允许发送的图片数量")
+    heybox_max_images_forward: int = Field(default=50, description="合并转发模式下最多允许发送的图片数量")
+    heybox_forward_image_type: Literal["path", "base64"] = Field(
+        default="path",
+        description="合并转发中图片消息段的传输格式：path（本地文件路径，默认，极低内存消耗）、base64（Base64内联数据流，强力图床转存）",
+    )
     heybox_cache_expire_days: int = Field(default=3, description="本地缓存文件保留天数，0 表示不按时间自动清理")
     heybox_max_cache_mb: int = Field(default=1024, description="本地缓存目录最大允许占用的磁盘空间，单位为 MB")
     heybox_download_concurrency: int = Field(default=8, description="多图并发异步下载的最大并发协程数")
